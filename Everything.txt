@@ -16,7 +16,8 @@ BEGIN
                           time_limit  => 500,
                           task_name   => '87s8z2zzpsg88_tuning_task11',
                           description => 'Tuning task1 for statement 87s8z2zzpsg88');
-  DBMS_OUTPUT.put_line('l_sql_tune_task_id: ' || l_sql_tune_task_id); END; /
+  DBMS_OUTPUT.put_line('l_sql_tune_task_id: ' || l_sql_tune_task_id); END;
+  /
 
 --
 -- Execute Tuning task
