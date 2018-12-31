@@ -1,0 +1,215 @@
+alter database force logging;
+alter database add supplemental log data;
+alter system set enable_goldengate_replication=true sid='*' scope=both;
+create user gg_admin identified by gg_admin default tablespace users temporary tablespace temp;
+grant create session, create table, alter any table, alter system, dba to gg_admin;
+exec dbms_goldengate_auth.grant_admin_privilege('gg_admin','*', TRUE, TRUE);
+
+create user james identified by james;
+create user dave identified by dave;
+grant create session, create table to dave,james;
+alter user james quota 50m on users;
+alter user dave quota 50m on users;
+create table james.my_obj as select * from dba_objects where 1=0;
+create table dave.my_obj as select * from dba_objects where 1=0;
+
+
+GGSCI 1> edit param mgr 
+PORT 7809
+USERID gg_admin@gnsh, PASSWORD gg_admin
+PURGEOLDEXTRACTS ./dirdat/*
+
+##
+## Goldengate Integrated Processes
+##
+
+GGSCI 2> start mgr 
+GGSCI 3> info all
+GGSCI 4> dblogin userid gg_admin@gnsh, password gg_admin
+GGSCI 5> add schematrandata james allcols
+GGSCI 6> add schematrandata dave allcols
+GGSCI 7> edit param exta1
+			extract exta1
+			userid gg_admin@gnsh, password gg_admin
+			exttrail ./dirdat/e1
+			tranlogoptions integratedparams (max_sga_size 256)
+			logallsupcols
+			updaterecordformat compact
+			table james.*;
+GGSCI 8> register extract exta1 database
+GGSCI 9> add extract exta1, integrated tranlog, begin now 
+GGSCI 10> add exttrail ./dirdat/e1, extract exta1, megabytes 100 
+GGSCI 11> edit param pmpa1
+			extract pmpa1
+			userid gg_admin@gnsh, password gg_admin
+			rmthost 12.3.21.119, mgrport 7910
+			rmttrail /u01/app/goldengate2/dirdat/p1
+			table james.*;
+			rmthost 12.3.21.118, mgrport 7910
+			rmttrail /u01/app/goldengate2/dirdat/p2
+			table roy.*;
+GGSCI 12> add extract pmpa1, exttrailsource ./dirdat/e1 
+GGSCI 13> add rmttrail /u01/app/goldengate2/dirdat/p1, extract pmpa1, megabytes 100
+GGSCI 14> start exta1
+GGSCI 15> start pmpa1
+GGSCI 16> info all
+
+####################################################################################################
+####################################################################################################
+####################################################################################################
+
+GGSCI 1> edit param mgr 
+port 7810
+userid gg_admin@gnsh, password gg_admin
+purgeoldextracts ./dirdat/*
+
+GGSCI 2> start mgr 
+GGSCI 3> info all
+GGSCI 4> dblogin userid gg_admin@gnsh, password gg_admin
+GGSCI 5> add schematrandata james allcols
+GGSCI 6> add schematrandata dave allcols
+GGSCI 7> edit param repb1
+			replicat repb1
+			userid gg_admin@gnsh, password gg_admin
+			dboptions integratedparams(parallelism 2)
+			assumetargetdefs
+			discardfile ./dirrpt/repb.dsc, purge
+			map james.*, target dave.*; 
+GGSCI 8> add replicat repb1 integrated exttrail ./dirdat/p1  
+GGSCI 9> start replicat repb1
+GGSCI 10> info all
+
+#########################################################################################################################################################################
+#########################################################################################################################################################################
+#########################################################################################################################################################################
+#########################################################################################################################################################################
+
+##
+## Goldengate Initial Load - Using RMTFILE method
+##
+
+GGSCI> dblogin userid gg_admin@crmdb password gg_admin
+GGSCI> add trandata SIEBEL.S_CONTACT allcols
+GGSCI> add trandata SIEBEL.S_ORG_EXT allcols
+GGSCI> add trandata SIEBEL.S_EVT_ACT allcols
+GGSCI> add trandata SIEBEL.S_POSTN allcols
+GGSCI> add trandata SIEBEL.S_ORG_EXT_X allcols
+GGSCI> add trandata SIEBEL.S_BU allcols
+GGSCI> add trandata SIEBEL.S_ORDER allcols
+GGSCI> add trandata SIEBEL.S_ACCNT_ATT allcols
+GGSCI> add trandata SIEBEL.S_USER allcols
+
+##
+## Check for current scn from database:-
+##
+
+SQL> select to_char(current_scn) from v$database;
+
+##
+## Check for DETAILS of tables mentioned in INITIAL LOAD from database:-
+##
+
+set lin 200 pages 500
+col owner for a10
+col segment_name for a25
+col gbytes for 99999.99
+select a.owner, a.segment_name, round(sum(a.bytes)/1024/1024/1024, 2) gbytes, b.num_rows, b.last_analyzed
+from dba_segments a, dba_tables b
+where
+a.owner=b.owner and
+a.segment_name = b.table_name and
+a.owner='SIEBEL' and
+a.segment_name in (
+'S_CONTACT',
+'S_ORG_EXT',
+'S_EVT_ACT',
+'S_POSTN',
+'S_ORG_EXT_X',
+'S_BU',
+'S_ORDER',
+'S_ACCNT_ATT',
+'S_USER'
+)
+group by a.owner, a.segment_name, b.num_rows, b.last_analyzed order by 3;
+
+OWNER      SEGMENT_NAME                 GBYTES   NUM_ROWS LAST_ANAL
+---------- ------------------------- --------- ---------- ---------
+SIEBEL     S_USER                          .00      26818 31-DEC-18
+SIEBEL     S_BU                            .00         32 21-DEC-18
+SIEBEL     S_POSTN                         .00      13735 31-DEC-18
+SIEBEL     S_ACCNT_ATT                    1.38    5326382 23-DEC-18
+SIEBEL     S_ORG_EXT_X                    1.77    6380144 23-DEC-18
+SIEBEL     S_CONTACT                      2.38    3146803 31-DEC-18
+SIEBEL     S_ORDER                        4.27    3443893 31-DEC-18
+SIEBEL     S_ORG_EXT                      6.79    6495340 31-DEC-18
+SIEBEL     S_EVT_ACT                     12.77   12651187 31-DEC-18
+
+GGSCI> edit param extload
+		extract extload
+		userid gg_admin@crmdb password gg_admin
+		rmthost 10.5.76.96, mgrport 7809
+		rmtfile /data/ogg/gg_home/dirdat/SIBEL/y9,  megabytes 512
+		table SIEBEL.S_CONTACT, sqlpredicate 'as of scn 13960689672622';
+		table SIEBEL.S_ORG_EXT, sqlpredicate 'as of scn 13960689672622';
+		table SIEBEL.S_EVT_ACT, sqlpredicate 'as of scn 13960689672622';
+		table SIEBEL.S_POSTN, sqlpredicate 'as of scn 13960689672622';
+		table SIEBEL.S_ORG_EXT_X, sqlpredicate 'as of scn 13960689672622';
+		table SIEBEL.S_BU, sqlpredicate 'as of scn 13960689672622';
+		table SIEBEL.S_ORDER, sqlpredicate 'as of scn 13960689672622';
+		table siebel.s_accnt_att, sqlpredicate 'as of scn 13960689672622';
+		table siebel.s_user, sqlpredicate 'as of scn 13960689672622';
+
+GGSCI> add extract extload, sourceistable
+GGSCI> start extload
+
+##
+## Goldengate Classic Extract (2 Node RAC) after Initial Load
+##
+
+##
+## Extract
+##
+
+GGSCI > edit param exta1
+			extract exta1
+			userid gg_admin@crmdb password gg_admin
+			exttrail ./dirdat/e1
+			tranlogoptions dblogreader
+			tranlogoptions bufsize 4096000
+			tranlogoptions dblogreaderbufsize 4096000
+			updaterecordformat compact
+			table SIEBEL.S_CONTACT;
+			table SIEBEL.S_ORG_EXT;
+			table SIEBEL.S_EVT_ACT;
+			table SIEBEL.S_POSTN;
+			table SIEBEL.S_ORG_EXT_X;
+			table SIEBEL.S_BU;
+			table SIEBEL.S_ORDER;
+			table siebel.S_ACCNT_ATT;
+			table siebel.S_USER;
+GGSCI > register extract exta1 logretention
+GGSCI > add extract exta1, tranlog, threads 2, scn 13960689672622
+GGSCI > add exttrail ./dirdat/e1, extract exta1, megabytes 1024
+GGSCI > start exta1 aftercsn 13960689672622
+
+##
+## Pump
+##
+
+GGSCI > edit param pmpa1
+			extract pmpa1
+			passthru
+			rmthost 10.5.76.96, mgrport 7809
+			rmttrail /data/ogg/gg_home/dirdat/SIBEL/z9
+			table SIEBEL.S_CONTACT;
+			table SIEBEL.S_ORG_EXT;
+			table SIEBEL.S_EVT_ACT;
+			table SIEBEL.S_POSTN;
+			table SIEBEL.S_ORG_EXT_X;
+			table SIEBEL.S_BU;
+			table SIEBEL.S_ORDER;
+			table siebel.s_accnt_att;
+			table siebel.s_user;
+GGSCI > add extract pmpa1, exttrailsource ./dirdat/e1 
+GGSCI > add rmttrail /data/ogg/gg_home/dirdat/SIBEL/z9, extract pmpa1, megabytes 1024
+GGSCI > start pmpa1
